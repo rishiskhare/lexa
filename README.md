@@ -1,198 +1,96 @@
-# Lexa — local Exa
+# Lexa
 
-> Hybrid retrieval over your local files and code, in a single static Rust
-> binary. Lexa applies the architecture of [Exa](https://exa.ai/) — five
-> latency-tiered search modes, hybrid BM25 + dense + RRF, two-stage
-> Matryoshka KNN, binary-quantized vectors, query-aware highlights, deep
-> reranking with optional query expansion, LLM-as-judge evaluation — to
-> the corpus already on your disk.
+> **Local-first hybrid retrieval for your Obsidian vault and code.** A
+> single static Rust binary plus an MCP server, so Codex / Claude
+> Desktop / Cursor / Claude Code can answer questions from your notes
+> without anything leaving your machine.
 
-```bash
-lexa index ~/repos/myproject
-lexa search "where does the rate limiter back off when redis is down"
-```
+[![Crates.io](https://img.shields.io/crates/v/lexa-obsidian?label=lexa-obsidian)](https://crates.io/crates/lexa-obsidian)
+[![Crates.io](https://img.shields.io/crates/v/lexa-core?label=lexa-core)](https://crates.io/crates/lexa-core)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
+[![CI](https://github.com/rishiskhare/lexa/actions/workflows/ci.yml/badge.svg)](https://github.com/rishiskhare/lexa/actions/workflows/ci.yml)
+[![Release](https://github.com/rishiskhare/lexa/actions/workflows/release.yml/badge.svg)](https://github.com/rishiskhare/lexa/actions/workflows/release.yml)
 
-```text
-crates/api/src/limiter.rs:48-72   0.7141
-  if !backend.is_healthy().await { tracing::warn!("redis down, switching to in-memory backoff");
-   return self.fallback.acquire(key).await; }
-```
+---
 
-## Highlights
-
-- **Single static binary**, no daemon, no Python, no Docker. SQLite (with
-  FTS5 and `sqlite-vec`) is the entire backend.
-- **Sub-10 ms `fast` tier** on real Nomic-v1.5 embeddings (M-series
-  warm-state, 2 000 docs, 500 iterations). 38× faster than the published
-  Exa Fast latency budget.
-- **Five search tiers** — `instant`, `dense`, `fast`, `deep`, `auto` —
-  mirroring Exa's tiered API.
-- **Two-stage Matryoshka KNN** (256-bit preview → 768-bit re-score) the
-  same way Exa runs prefix-256 over their 4096-dim embeddings.
-- **Deep tier with query expansion** (`additional_queries`) and a sigmoid-
-  blended cross-encoder reranker that fixes the override-RRF failure
-  mode.
-- **Query-aware highlights** — sentence-level span extraction, the same
-  idea behind Exa's [contents API "highlights"](https://exa.ai/docs/reference/contents).
-- **Five reproducible benchmark harnesses**, full-methodology JSON
-  artifacts, CI gate. See [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
-- **MCP server** (`lexa-mcp`) over stdio so any Anthropic-MCP client
-  (Claude Desktop, Claude Code, Cursor, etc.) gets `search_files`,
-  `index_path`, `purge_path`, and friends for free.
-
-## How Lexa maps to Exa
-
-| Exa concept                      | Lexa equivalent                                                                                       |
-|----------------------------------|-------------------------------------------------------------------------------------------------------|
-| Instant tier (<200 ms, BM25)     | `lexa search --tier instant` — FTS5 BM25, p50 ~250 µs.                                                |
-| Fast tier (~350 ms, neural)      | `lexa search --tier dense` (KNN-only) or `--tier fast` (hybrid). p50 ~9 ms.                           |
-| Auto tier (~1 s, intelligent)    | `lexa search --tier auto` — query router in `classify_query`. Default tier.                           |
-| Deep tier (5-60 s, agentic)      | `lexa search --tier deep` + `SearchOptions::additional_queries` for [`additionalQueries`-style](https://exa.ai/blog/exa-deep) fan-out. |
-| Hybrid retrieval (BM25 + dense)  | RRF (k=60) over FTS5 BM25 and binary-quantized vector KNN, run concurrently. See [Exa: Composing a Search Engine](https://exa.ai/blog/composing-a-search-engine). |
-| BM25 optimizations               | FTS5's built-in BM25 implementation; OR-of-quoted-tokens query construction with a curated stopword set. (Lexa doesn't reimplement Exa's six [posting-list compression tricks](https://exa.ai/blog/bm25-optimization) — local corpora don't justify them.) |
-| Matryoshka prefix                | Nomic v1.5-Q (768d, MRL-trained at `{64, 128, 256, 512, 768}`); `vectors_bin_preview bit[256]` table for first-stage KNN. See [Exa 2.0: building a web-scale vector DB](https://exa.ai/blog/exa-api-2-0). |
-| Binary quantization              | `sqlite-vec`'s `vec_quantize_binary()` and `bit[N]` columns; Hamming distance via SIMD intrinsics. 32× storage shrink. |
-| Cross-encoder reranking          | `BAAI/bge-reranker-base` over top-15 fused candidates, sigmoid-blended at α = 0.7 with the RRF score. |
-| Highlights / contents API        | `search.rs::highlight` — query-token-overlap-scored sentence span, ~10× LLM-token reduction vs full chunks. |
-| `additionalQueries`              | `SearchOptions::additional_queries: Vec<String>`; the deep tier fans out N+1 queries, RRF-fuses them, then reranks. The bench harness includes an Ollama-backed reformulation helper. |
-| LLM-as-judge eval (5-dim rubric) | `lexa-bench simpleqa` — Harness E. Scores relevance, authority, content_issues, evaluator_confidence, overall in [0, 1]. Default judge is local Ollama running `qwen3:8b`. See [Exa: Evaluating Search](https://exa.ai/blog/evals-at-exa). |
-
-What Lexa **doesn't** clone:
-
-- Crawl freshness — Lexa indexes static local trees, not the web.
-- Websets-scale entity finding — billions of records / async enrichment
-  pipelines aren't a single-binary local feature.
-- Authority / domain reputation signals — those are web-graph specific.
-
-The local-first tradeoff is what makes the latency budget viable. Exa
-Fast targets <500 ms because it's reaching across a planet-scale index;
-Lexa Fast hits 9 ms because everything is in SQLite next to your CPU.
-
-## Install
-
-```bash
-cargo install --path crates/lexa-cli       # the `lexa` CLI
-cargo install --path crates/lexa-mcp       # the `lexa-mcp` MCP server
-```
-
-Or run from a clone:
-
-```bash
-cargo build --workspace --release
-./target/release/lexa --help
-```
-
-The first time you run a real-embedding command, fastembed downloads the
-Nomic v1.5-Q ONNX (~110 MB) and the BGE-reranker-base ONNX (~280 MB) into
-`./.fastembed_cache/`. Subsequent runs reuse the cache.
-
-## CLI
-
-```text
-lexa index <path> [--db <path>]
-lexa search <query> [--tier instant|dense|fast|deep|auto] [--limit N] [--json] [--db <path>]
-lexa purge <path> [--db <path>]
-lexa status [--db <path>]
-lexa watch <path> [--db <path>]
-```
-
-Default DB is `~/.lexa/index.sqlite`. `--hash-embeddings` swaps to the
-deterministic FNV-1a hash backend for tests / offline runs.
-
-`--json` produces a stable JSON shape with `path`, `line_start`,
-`line_end`, `score`, `excerpt`, and a `breakdown` object exposing the
-RRF inputs, rerank score (deep only), and the routed tier (auto only).
-
-## MCP server
-
-Add to your MCP client config (Claude Desktop / Claude Code / Cursor):
-
-```json
-{
-  "mcpServers": {
-    "lexa": {
-      "command": "lexa-mcp",
-      "env": { "LEXA_DB": "/Users/you/.lexa/index.sqlite" }
-    }
-  }
-}
-```
-
-Tools:
-
-- `search_files(query, tier?, limit?)`
-- `index_path(path)`
-- `list_indexed_paths()`
-- `purge_path(path)`
-- `status()`
-
-stderr is the only log channel; stdout is reserved for the JSON-RPC
-stream so the protocol stays clean.
-
-## Library
-
-```toml
-[dependencies]
-lexa-core = "0.1"
-```
-
-```rust
-use lexa_core::{open, EmbeddingConfig, SearchOptions};
-
-let mut db = open("/tmp/lexa.sqlite", EmbeddingConfig::default())?;
-db.index_path("/path/to/repo")?;
-
-let hits = db.search(&SearchOptions::new("hybrid retrieval implementation"))?;
-for hit in hits {
-    println!("{}:{}-{}  {:.4}  {}", hit.path, hit.line_start, hit.line_end, hit.score, hit.excerpt);
-}
-```
-
-The default `SearchOptions` uses the `auto` tier and limit 10. Set
-`tier: SearchTier::Deep` and populate `additional_queries` for Exa-style
-multi-query deep search.
-
-## Lexa for Obsidian — 60 seconds to a working setup
-
-Ask your Obsidian vault questions through Codex, Claude Desktop,
-Cursor, Claude Code, or any MCP client. **Local-first** — your notes
-never leave your machine, no API keys, no cloud round-trips.
+## Quick start
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/rishiskhare/lexa/main/scripts/install.sh | sh
 lexa-obsidian setup
+# restart Codex / Claude Desktop / Cursor, then ask:
+#   > what did I write about <topic>?
 ```
 
-`setup` is interactive: it asks for your vault path, optionally
-pre-indexes (recommended for >1 000-note vaults), writes the right MCP
-config block into `~/.codex/config.toml` (and Claude Desktop / Claude
-Code if you opt in), and drops an `AGENTS.md` in your vault root so
-agents route note questions through Lexa **without** having to be
-prompted with "Use lexa-obsidian.".
+That's it. `setup` is interactive: it picks up your vault, optionally
+pre-indexes it, writes the right MCP config block into
+`~/.codex/config.toml` (and Claude Desktop / Claude Code if you opt
+in), and drops an `AGENTS.md` in your vault root so agents route note
+questions through Lexa **without** the "Use lexa-obsidian." prefix.
 
-Restart your MCP client and try:
+---
+
+## Demo
 
 ```text
-> what did I write about <some topic>?
-> list my top 10 tags
-> show me backlinks for "<some note name>"
-> find notes similar to "<some note>"
+> what did I write about the rate limiter redis fallback last quarter?
 ```
 
-The agent picks the right tool from the natural-language phrasing.
+```json
+[
+  {
+    "path": "Daily/2026-04-30.md",
+    "title": "Daily 2026-04-30",
+    "score": 0.7141,
+    "heading": "Followups",
+    "excerpt": "redis down, switching to in-memory backoff in `acquire`. The reranker latency was acceptable at p95 of 261 ms.",
+    "line_start": 12,
+    "line_end": 18,
+    "tags": ["daily", "project/lexa"],
+    "breakdown": { "routed_to": "fast" }
+  }
+]
+```
 
-### What the AI gets
+Want to try it without your own vault? Point Lexa at the bundled
+[`demo-vault/`](demo-vault/):
 
-| When you ask                          | The AI calls       | What it returns                                                  |
-|---------------------------------------|--------------------|-------------------------------------------------------------------|
-| "What did I write about X?"           | `search_notes`     | Top notes ranked by hybrid (BM25 + dense + reranker) score, with title, path, line range, headline excerpt, tags, and the routed tier. |
-| "Show me my note titled Y"            | `get_note`         | Frontmatter + body + outgoing/incoming wiki-links + tags. Optionally a single block by `^id`. |
-| "What links to Y?"                    | `find_backlinks`   | Every linking note with the alias / header / block id used.       |
-| "Find notes similar to Y"             | `get_similar`      | Semantic neighbours of the seed note (excluding itself).          |
-| "What tags do I use most?"            | `list_tags`        | Top tags by usage, optional prefix filter.                         |
-| "Re-index" / "drop the index"         | `index_vault` / `purge_vault` | Maintenance.                                          |
+```bash
+lexa-obsidian --vault ./demo-vault setup --no-codex --no-agents-md
+lexa-obsidian --vault ./demo-vault --hash-embeddings search "reranker latency"
+```
 
-### Subcommands
+---
+
+## Features
+
+| Feature                                  | What it gives you                                                                  |
+|------------------------------------------|------------------------------------------------------------------------------------|
+| **Hybrid retrieval**                     | BM25 (FTS5) + binary-quantized 768-d Matryoshka KNN (sqlite-vec) + cross-encoder rerank, fused with RRF (k=60). |
+| **Five tiers**                           | `instant` / `dense` / `fast` / `deep` / `auto` — mirroring Exa's API. p50 ~9 ms on the fast tier with real Nomic v1.5-Q. |
+| **Auto-routing**                         | Single-identifier queries → `instant` (BM25); long question-form → `deep`; default → `fast`. No "Use lexa-obsidian." needed. |
+| **Obsidian-native**                      | Frontmatter stripped before embedding. Wiki-links, inline `#tags`, `^block-ids`, and `![[embeds]]` parsed into sidecar tables. |
+| **MCP-first**                            | Eight tools — `search_notes`, `find_backlinks`, `list_tags`, `get_note`, `get_similar`, `index_vault`, `purge_vault`, `vault_status`. |
+| **Background indexing**                  | The MCP server indexes in the background; content calls return `{indexing: true, ...}` while in-flight, so Codex never hangs. |
+| **One static binary**                    | No daemon, no Python, no Docker. SQLite + `sqlite-vec` is the entire backend.      |
+| **100% local**                           | First run downloads Nomic + BGE ONNX (~390 MB). After that, zero network calls. No telemetry, no API keys. |
+| **`--offline` flag**                     | Sets `HF_HUB_OFFLINE=1` so fastembed refuses every network fetch — hard offline guarantee after `models prefetch`. |
+
+---
+
+## Use cases
+
+| Want to...                                  | Do this                                                                |
+|---------------------------------------------|------------------------------------------------------------------------|
+| Ask Codex / Claude / Cursor about your vault| `lexa-obsidian setup` and ask in plain English.                        |
+| Search a code repo from the CLI             | `lexa index ~/repo && lexa search "rate limiter fallback"`.            |
+| Wire MCP search into a custom agent         | Use `lexa-obsidian-mcp` (rmcp stdio) or `lexa-mcp` (file-shaped).      |
+| Embed retrieval into your own Rust app      | `lexa_obsidian::LexaObsidianDb::open(...)` — see the [crate docs](https://docs.rs/lexa-obsidian). |
+| Try it without your own data                | `lexa-obsidian --vault ./demo-vault setup --no-codex --no-agents-md`.  |
+
+---
+
+## Subcommands
 
 ```text
 lexa-obsidian setup            # interactive bootstrap (most users only need this)
@@ -206,198 +104,133 @@ lexa-obsidian --vault <path> search <query> [--tier auto|fast|deep] [--tag X] [-
 lexa-obsidian --vault <path> watch
 ```
 
-`--vault` falls back to `LEXA_OBSIDIAN_VAULT`. The DB path defaults to
-`~/.lexa/obsidian-<sha-of-vault>.sqlite` so two distinct vaults never
+`--vault` falls back to `LEXA_OBSIDIAN_VAULT`. The DB defaults to
+`~/.lexa/obsidian-<sha-of-vault>.sqlite` — two distinct vaults never
 share an index.
 
-### What gets parsed
+---
 
-- **Frontmatter** (`title:`, `aliases:`, `tags:` + arbitrary custom
-  fields preserved in `note_metadata.raw_json`). Stripped *before*
-  embedding so it doesn't pollute the vector representation.
-- **Wiki-links** — `[[Note]]`, `[[Note|Alias]]`, `[[Note#Header]]`,
-  `[[Note^block-id]]`, `![[Embed]]`. Stored in `note_links`; backlinks
-  are a single SQL JOIN.
-- **Tags** — frontmatter `tags:` (string, list, or comma-string) plus
-  inline `#tag` (including nested `#project/lexa`). Lowercase-
-  normalised. Code fences and heading lines are correctly skipped.
-- **Block ids** — trailing `^block-id` markers persist into
-  `note_blocks` and are queryable through `get_note { block: "^abc" }`.
-
-### Schema (sidecar tables in the same SQLite file)
-
-```sql
-note_metadata (doc_id PK, title, aliases_json, raw_json)
-note_links    (id PK, src_doc_id, target_name, target_path, header, block_id, alias, kind)
-note_tags     (doc_id, tag, PRIMARY KEY(doc_id, tag))
-note_blocks   (chunk_id PK, doc_id, block_id)
-```
-
-`ON DELETE CASCADE` rides on `documents.id`, so purging a path cleans
-the sidecars automatically.
-
-### Indexing UX
-
-Lexa indexes in the **background** as soon as the MCP server starts.
-While indexing is in flight, content-bearing tool calls (`search_notes`,
-`get_note`, `get_similar`, `find_backlinks`) return a fast `{indexing:
-true, notes_seen, elapsed_seconds}` payload instead of blocking — so
-Codex never appears hung. For large vaults (>1 000 notes) running
-`lexa-obsidian setup` once with the pre-index step (or `lexa-obsidian
-index` ahead of time) eliminates the wait entirely.
-
-### Privacy + threat model
-
-- 100 % local. Network calls: model downloads on first run (Nomic v1.5
-  ONNX ~110 MB, BGE reranker ~280 MB), nothing after. No telemetry, no
-  analytics, no API keys.
-- Read-only on your vault. The MCP server does not create, edit, or
-  delete notes.
-- The MCP server only spawns the `lexa-obsidian-mcp` binary itself,
-  never user-supplied subprocesses.
-- Verify yourself: `tcpdump -i any host huggingface.co` for ten minutes
-  of usage shows zero traffic after the model cache is hot.
-
-For more, see [`docs/FAQ.md`](docs/FAQ.md) and
-[`docs/adr/006-obsidian.md`](docs/adr/006-obsidian.md).
-
-## Benchmarks
-
-Five harnesses, fully reproducible. Numbers below are warm-state on
-M-series macOS arm64, release build, real Nomic v1.5-Q. See
-[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for hardware details, full
-methodology, and the date each number was measured.
-
-### Harness A — Latency
-
-2 000 synthetic Markdown docs, 500 iterations / tier, fixed query set:
-
-| Tier    | p50      | p95      | p99      |
-|---------|----------|----------|----------|
-| instant | 245 µs   | 840 µs   | 861 µs   |
-| dense   | 8.97 ms  | 9.82 ms  | 10.20 ms |
-| fast    | 9.00 ms  | 9.92 ms  | 10.19 ms |
-| deep    | 261 ms   | 298 ms   | 313 ms   |
-
-Pairs with a Criterion bench (`cargo bench -p lexa-bench --bench latency`)
-and a CI gate that fails if fast-tier p50 > 400 ms on shared GitHub
-Actions runners.
-
-### Harness B — BEIR retrieval quality (SciFact, 100 queries)
-
-| Tier    | nDCG@10  | MRR@10 | Recall@100 | p50      | p95      |
-|---------|----------|--------|------------|----------|----------|
-| instant | 0.6560   | 0.6184 | 0.8680     | 3 ms     | 5 ms     |
-| fast    | 0.6778   | 0.6395 | 0.8980     | 17 ms    | 22 ms    |
-| deep    | **0.7042** | **0.6674** | 0.8360 | 2.57 s   | 2.81 s   |
-
-Hybrid lifts BM25-only by +2.2 nDCG points; deep adds another +2.6 nDCG
-on top, **eliminating the previous deep-tier regression** caused by
-unbounded reranker logits overriding RRF. Beats the published BEIR BM25
-SciFact baseline (~0.665) at p95 < 25 ms on the fast tier.
-
-### Harness C — Agent quality (20 NL queries on this repo)
-
-| Tool                 | Tier      | Correct | Accuracy | Median latency |
-|----------------------|-----------|---------|----------|----------------|
-| `lexa` (Nomic)       | **auto**  | 16 / 20 | **0.80** | 11 ms          |
-| `lexa` (Nomic)       | fast      | 15 / 20 | 0.75     | 10 ms          |
-| `grep -rE`           | external  |  0 / 20 | 0.00     |  8 ms          |
-
-`auto` outperforms `fast` because the router sends single-identifier
-queries (`vec_quantize_binary`, `LexaDb::open`) straight to BM25-only
-`instant`, where exact-symbol lookups beat hybrid scoring.
-
-### Harness D — Head-to-head against external CLIs
-
-Wraps any external command (`grep`, `rg`, `qmd-cli`, ...) and runs the
-same query set. Reports per-tool latency and match rate against expected
-file paths. See `lexa-bench compare --help`.
-
-### Harness E — SimpleQA-style LLM-as-judge
-
-Mirrors Exa's [evaluation methodology](https://exa.ai/blog/evals-at-exa):
-hand-curated factual questions, scored on the five-dim rubric (relevance,
-authority, content_issues, evaluator_confidence, overall) in `[0, 1]`.
+## Other ways to install
 
 ```bash
-# Local-first: judge is whatever's running in Ollama.
-cargo run -p lexa-bench --release -- simpleqa \
-  --queries bench/simpleqa/questions.json --corpus . \
-  --tier auto --judge ollama --judge-model qwen3:8b \
-  --real-embeddings --json bench-results/simpleqa.json
+# Cargo (any Rust target, including Linux ARM64):
+cargo install lexa-obsidian
+
+# Homebrew (macOS) — coming soon, file an issue if you want it sooner.
+
+# Manual: grab a tarball from
+# https://github.com/rishiskhare/lexa/releases/latest
 ```
 
-A deterministic `--judge mock` backend exists for CI smoke runs that
-need to verify wiring without a model download.
-
-### Reproducers
-
-```bash
-# Harness A — latency (writes JSON, gates CI)
-cargo run -p lexa-bench --release -- latency \
-  --db /tmp/lexa.sqlite --docs 2000 --iterations 500 \
-  --real-embeddings --json bench-results/latency-nomic.json
-
-# Harness A — Criterion (HTML reports under target/criterion/)
-cargo bench -p lexa-bench --bench latency
-
-# Harness B — BEIR
-cargo run -p lexa-bench --release -- beir scifact --download \
-  --db /tmp/lexa-scifact.sqlite --real-embeddings \
-  --tiers instant,dense,fast,deep --max-queries 100 \
-  --json bench-results/scifact.json
-
-# Harness C — agent (auto tier on the lexa repo)
-cargo run -p lexa-bench --release -- agent \
-  --queries bench/agent/queries.json --corpus . \
-  --tool lexa --tier auto --real-embeddings \
-  --db /tmp/lexa-agent.sqlite \
-  --json bench-results/agent-auto.json
-
-# Harness D — head-to-head with grep
-cargo run -p lexa-bench --release -- compare \
-  --queries bench/agent/queries.json --corpus . \
-  --command "grep -rEln {query} {corpus}/crates" --label grep \
-  --json bench-results/compare-grep.json
-
-# Harness E — SimpleQA (mock judge for CI)
-cargo run -p lexa-bench --release -- simpleqa \
-  --queries bench/simpleqa/questions.json --corpus . \
-  --tier auto --judge mock --real-embeddings \
-  --json bench-results/simpleqa.json
-```
+---
 
 ## Project layout
 
 ```text
 lexa/
-├── Cargo.toml                     # workspace
-├── README.md                      # this file
 ├── crates/
-│   ├── lexa-core/                 # library: chunking, embed, retrieval
-│   ├── lexa-cli/                  # `lexa` binary
-│   ├── lexa-mcp/                  # `lexa-mcp` rmcp stdio server
-│   └── lexa-bench/                # `lexa-bench` — five harnesses
+│   ├── lexa-core/        # Library: chunking, embedding, hybrid retrieval, fusion.
+│   ├── lexa-cli/         # `lexa` CLI for any file tree (code, docs).
+│   ├── lexa-mcp/         # `lexa-mcp` rmcp stdio server (file-shaped tools).
+│   ├── lexa-obsidian/    # `lexa-obsidian` CLI + `lexa-obsidian-mcp` server.
+│   └── lexa-bench/       # Five reproducible benchmark harnesses.
 ├── docs/
-│   ├── ARCHITECTURE.md            # this is the design doc
-│   ├── BENCHMARKS.md              # full benchmark methodology
-│   └── adr/000–005-*.md           # one-page decisions
-├── bench/
-│   ├── agent/queries.json         # 20 NL queries against this repo
-│   ├── agent/SKILL.md             # full agent-loop spec (Anthropic API)
-│   └── simpleqa/questions.json    # SimpleQA seed set
-├── bench-results/                 # committed JSON artifacts
-└── tests/fixtures/sample/         # tiny corpus for tests
+│   ├── ARCHITECTURE.md   # Crate map, schema, retrieval pipeline.
+│   ├── BENCHMARKS.md     # Latency / BEIR / agent / SimpleQA numbers.
+│   ├── FAQ.md            # First-run latency, vault switching, uninstall, privacy.
+│   ├── THREAT_MODEL.md   # Read-only-on-vault guarantee, network footprint.
+│   └── adr/              # Six one-page architecture decision records.
+├── bench/                # Hand-curated query sets for the agent + SimpleQA harnesses.
+├── bench-results/        # Committed JSON artifacts so every published number is reproducible.
+├── demo-vault/           # 6-note synthetic vault — try Lexa without your own data.
+├── templates/AGENTS.md   # Dropped into your vault root by `setup`.
+└── scripts/install.sh    # `curl | sh` installer.
 ```
+
+---
+
+## Documentation
+
+- **Architecture** — [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- **Benchmarks** — [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md): real numbers
+  with hardware, exact corpus URL, and the command that produces them.
+- **FAQ** — [`docs/FAQ.md`](docs/FAQ.md): first-run delay, vault
+  switching, uninstall, model swap, privacy verification with `tcpdump`.
+- **Threat model** — [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md):
+  what Lexa does, what it does *not* do, and how to verify each claim.
+- **Decision log** — [`docs/adr/`](docs/adr/): six ADRs covering name,
+  storage, embeddings, chunking, search tiers, MCP posture, Obsidian
+  adapter.
+
+---
+
+## How Lexa maps to Exa
+
+Lexa is local-first, but the architecture follows Exa's: tiered
+search, hybrid retrieval, Matryoshka prefixes, binary quantization,
+query-aware highlights.
+
+| Exa concept                      | Lexa equivalent                                                                                       |
+|----------------------------------|-------------------------------------------------------------------------------------------------------|
+| Instant tier (<200 ms, BM25)     | `--tier instant` — FTS5 BM25 only, p50 ~250 µs.                                                       |
+| Fast tier (neural / hybrid)      | `--tier dense` (KNN-only) or `--tier fast` (hybrid + RRF), p50 ~9 ms.                                 |
+| Auto tier                        | `--tier auto` — query router in `classify_query`. Default.                                            |
+| Deep tier (agentic)              | `--tier deep` + `SearchOptions::additional_queries` for [`additionalQueries`-style](https://exa.ai/blog/exa-deep) fan-out.    |
+| Hybrid retrieval (BM25 + dense)  | RRF (k=60) over FTS5 BM25 and binary-quantized vector KNN, run concurrently. See [Exa: Composing a Search Engine](https://exa.ai/blog/composing-a-search-engine). |
+| Matryoshka prefix                | Nomic v1.5-Q (768d, MRL-trained at `{64, 128, 256, 512, 768}`) — `vectors_bin_preview bit[256]` table. See [Exa 2.0](https://exa.ai/blog/exa-api-2-0). |
+| Binary quantization              | `sqlite-vec`'s `vec_quantize_binary()` and `bit[N]` columns; SIMD Hamming distance.                   |
+| Cross-encoder reranking          | `BAAI/bge-reranker-base` over top-15 fused candidates, sigmoid-blended at α = 0.7 with the RRF score.|
+| Highlights / contents API        | `search.rs::highlight` — query-token-overlap-scored sentence span.                                    |
+| LLM-as-judge eval                | `lexa-bench simpleqa` — Harness E. Five-dim rubric. Default judge `qwen3:8b` via local Ollama.        |
+
+---
+
+## Privacy
+
+Lexa runs **entirely locally**. The only outbound network call is the
+first-run download of two ONNX models (Nomic v1.5-Q ~110 MB, BGE
+reranker ~280 MB) from Hugging Face. After that — zero network. No
+telemetry, no analytics, no API keys.
+
+For a hard offline guarantee, run `lexa-obsidian models prefetch` once
+on a connected machine, then use `--offline` (or `LEXA_OFFLINE=1`) to
+make fastembed refuse every network call. See
+[`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the verification
+recipe (`tcpdump`-style proof) and the full posture.
+
+---
+
+## Development
+
+```bash
+git clone https://github.com/rishiskhare/lexa
+cd lexa
+cargo build --workspace --release
+cargo test --workspace --release
+cargo clippy --workspace --all-targets --release -- -D warnings
+cargo fmt --all -- --check
+```
+
+47 tests across 11 suites, no `unsafe` outside the SQLite extension
+loader, all hot paths covered by Criterion benches in
+[`crates/lexa-bench/benches/`](crates/lexa-bench/benches/).
+
+---
+
+## Contributing
+
+Issues and PRs welcome. The decision log under
+[`docs/adr/`](docs/adr/) is the best place to start if you want to
+understand the design before changing it. For larger changes, open an
+issue first so the architectural fit can be discussed.
+
+---
 
 ## License
 
 Dual-licensed under either of:
 
-- Apache License, Version 2.0 ([LICENSE-APACHE] or
-  <https://www.apache.org/licenses/LICENSE-2.0>)
-- MIT license ([LICENSE-MIT] or
-  <https://opensource.org/licenses/MIT>)
+- Apache License, Version 2.0 ([`LICENSE-APACHE`](LICENSE-APACHE))
+- MIT license ([`LICENSE-MIT`](LICENSE-MIT))
 
 at your option.
