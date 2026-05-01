@@ -13,7 +13,7 @@ categories = ["command-line-utilities", "text-processing"]
 
 [dependencies]
 anyhow.workspace = true
-lexa-core = { path = "../lexa-core" }
+lexa-core = { path = "../lexa-core", version = "0.1.0" }
 rmcp.workspace = true
 serde.workspace = true
 serde_json.workspace = true

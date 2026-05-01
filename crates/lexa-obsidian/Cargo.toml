@@ -26,7 +26,7 @@ path = "src/bin/mcp.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-lexa-core = { path = "../lexa-core" }
+lexa-core = { path = "../lexa-core", version = "0.1.0" }
 notify.workspace = true
 regex.workspace = true
 rmcp.workspace = true
