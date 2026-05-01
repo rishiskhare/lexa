@@ -1,0 +1,25 @@
+[package]
+name = "lexa-bench"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+lexa-core = { path = "../lexa-core" }
+serde.workspace = true
+serde_json.workspace = true
+ureq.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+tempfile.workspace = true
+
+# Harness A — Criterion-based latency benchmarks. Run with:
+#   cargo bench -p lexa-bench --bench latency
+[[bench]]
+name = "latency"
+harness = false

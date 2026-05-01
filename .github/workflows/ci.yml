@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --release
+
+  # Harness A latency gate. Uses the deterministic hash backend so it does
+  # not need to download a 30+MB ONNX model on shared GHA runners. The
+  # numbers reported here are for *trend tracking* — the canonical
+  # published numbers in docs/BENCHMARKS.md are measured on M-series
+  # hardware and listed there with full reproducer metadata.
+  bench-latency-gate:
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build bench harness
+        run: cargo build --release -p lexa-bench
+      - name: Run latency gate (fast tier p50 < 400ms on shared CI)
+        run: |
+          ./target/release/lexa-bench latency \
+            --db /tmp/lexa-ci.sqlite \
+            --docs 2000 \
+            --iterations 200 \
+            --gate-fast-p50-ms 400 \
+            --json /tmp/lexa-latency.json
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: latency-report
+          path: /tmp/lexa-latency.json
+          if-no-files-found: warn

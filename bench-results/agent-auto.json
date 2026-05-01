@@ -1,0 +1,8 @@
+{
+  "tool": "lexa",
+  "tier": "auto",
+  "queries": 20,
+  "correct": 16,
+  "accuracy": 0.8,
+  "median_latency_ms": 11
+}

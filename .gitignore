@@ -1,0 +1,17 @@
+# Rust build output
+/target/
+**/*.rs.bk
+
+# fastembed model cache (downloaded on first run)
+/.fastembed_cache/
+
+# Local SQLite DBs left around by ad-hoc runs
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,102 @@
+[
+  {
+    "query": "where does lexa parse the FTS5 tokenizer query string with stopword filtering",
+    "expected_path": "crates/lexa-core/src/query.rs",
+    "expected_line_range": [12, 30]
+  },
+  {
+    "query": "function that converts an embedding to a raw little-endian byte buffer",
+    "expected_path": "crates/lexa-core/src/embed.rs",
+    "expected_line_range": [217, 230]
+  },
+  {
+    "query": "Matryoshka truncation helper that re-normalizes after slicing",
+    "expected_path": "crates/lexa-core/src/embed.rs",
+    "expected_line_range": [165, 185]
+  },
+  {
+    "query": "where the BGE cross encoder reranker is created from fastembed",
+    "expected_path": "crates/lexa-core/src/embed.rs",
+    "expected_line_range": [115, 135]
+  },
+  {
+    "query": "RRF fusion implementation that merges BM25 and vector ranks",
+    "expected_path": "crates/lexa-core/src/search.rs",
+    "expected_line_range": [340, 365]
+  },
+  {
+    "query": "deep tier rerank function that calls the cross encoder",
+    "expected_path": "crates/lexa-core/src/search.rs",
+    "expected_line_range": [425, 470]
+  },
+  {
+    "query": "tier dispatch that selects instant, dense, fast, or deep retrieval paths",
+    "expected_path": "crates/lexa-core/src/search.rs",
+    "expected_line_range": [80, 200]
+  },
+  {
+    "query": "vector_search that runs Hamming KNN over the binary quantized table",
+    "expected_path": "crates/lexa-core/src/search.rs",
+    "expected_line_range": [320, 340]
+  },
+  {
+    "query": "code chunker that walks tree-sitter nodes for function and class boundaries",
+    "expected_path": "crates/lexa-core/src/chunk.rs",
+    "expected_line_range": [110, 145]
+  },
+  {
+    "query": "markdown chunker keyed on heading levels",
+    "expected_path": "crates/lexa-core/src/chunk.rs",
+    "expected_line_range": [38, 75]
+  },
+  {
+    "query": "document content hash computed before deciding whether to re-index",
+    "expected_path": "crates/lexa-core/src/db.rs",
+    "expected_line_range": [110, 130]
+  },
+  {
+    "query": "batched indexing flush that runs the embedder and inserts a transaction",
+    "expected_path": "crates/lexa-core/src/db.rs",
+    "expected_line_range": [120, 165]
+  },
+  {
+    "query": "schema migration that creates documents, chunks, FTS5 and vec0 tables",
+    "expected_path": "crates/lexa-core/src/db.rs",
+    "expected_line_range": [340, 400]
+  },
+  {
+    "query": "default database path under the user's home directory",
+    "expected_path": "crates/lexa-core/src/db.rs",
+    "expected_line_range": [29, 40]
+  },
+  {
+    "query": "MCP tool that exposes search_files over stdio",
+    "expected_path": "crates/lexa-mcp/src/main.rs",
+    "expected_line_range": [42, 70]
+  },
+  {
+    "query": "MCP tool to remove an indexed path",
+    "expected_path": "crates/lexa-mcp/src/main.rs",
+    "expected_line_range": [80, 98]
+  },
+  {
+    "query": "CLI watch command that incrementally re-indexes on file change events",
+    "expected_path": "crates/lexa-cli/src/main.rs",
+    "expected_line_range": [120, 170]
+  },
+  {
+    "query": "CLI search subcommand parsing with tier, limit, json output flags",
+    "expected_path": "crates/lexa-cli/src/main.rs",
+    "expected_line_range": [25, 90]
+  },
+  {
+    "query": "Harness A latency benchmark percentile reporter with CI gate",
+    "expected_path": "crates/lexa-bench/src/main.rs",
+    "expected_line_range": [318, 410]
+  },
+  {
+    "query": "BEIR benchmark harness that downloads a corpus and reports nDCG and MRR",
+    "expected_path": "crates/lexa-bench/src/main.rs",
+    "expected_line_range": [410, 540]
+  }
+]

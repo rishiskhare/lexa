@@ -1,0 +1,52 @@
+[
+  {
+    "question": "What constant value does Lexa use for the RRF fusion k parameter?",
+    "expected_fact": "RRF_K = 60.0 — the canonical Cormack 2009 value also used by Exa.",
+    "expected_path": "crates/lexa-core/src/search.rs"
+  },
+  {
+    "question": "Which embedding model backbone does Lexa default to for the dense retrieval path?",
+    "expected_fact": "nomic-ai/nomic-embed-text-v1.5 quantized, 768 dimensions, Matryoshka-trained at {64, 128, 256, 512, 768}.",
+    "expected_path": "crates/lexa-core/src/embed.rs"
+  },
+  {
+    "question": "What dimension does the Matryoshka preview vector index use?",
+    "expected_fact": "PREVIEW_DIMS = 256, stored in the bit[256] vectors_bin_preview vec0 virtual table.",
+    "expected_path": "crates/lexa-core/src/embed.rs"
+  },
+  {
+    "question": "How does Lexa parallelize the BM25 SQL hit and the embedder forward pass?",
+    "expected_fact": "std::thread::scope spawns a worker for the Mutex<Embedder>::embed_query while the main thread runs FTS5 BM25 SQL; both join before vector_knn.",
+    "expected_path": "crates/lexa-core/src/search.rs"
+  },
+  {
+    "question": "What query routing rule sends short identifier-shaped queries to the Instant tier?",
+    "expected_fact": "classify_query routes to Instant when there are 1-2 alphanumeric tokens AND any token has snake_case, camelCase/PascalCase, or path-like (`::` or `.`) shape.",
+    "expected_path": "crates/lexa-core/src/search.rs"
+  },
+  {
+    "question": "How does Lexa blend the cross-encoder rerank score with the RRF fusion score?",
+    "expected_fact": "sigmoid(reranker_logit) is mixed with the RRF score using RERANK_BLEND = 0.7 weight on the reranker, 0.3 on RRF.",
+    "expected_path": "crates/lexa-core/src/search.rs"
+  },
+  {
+    "question": "How many candidates does Lexa hand to the BGE cross-encoder reranker at the deep tier?",
+    "expected_fact": "RERANK_CANDIDATES = 15 (down from 30), trimmed to reduce noise and latency.",
+    "expected_path": "crates/lexa-core/src/search.rs"
+  },
+  {
+    "question": "What asymmetric task prefixes does Lexa apply when embedding queries vs documents?",
+    "expected_fact": "QUERY_PREFIX = 'search_query: ' and DOCUMENT_PREFIX = 'search_document: ', applied automatically by Embedder::embed_query and Embedder::embed_documents.",
+    "expected_path": "crates/lexa-core/src/embed.rs"
+  },
+  {
+    "question": "How does Lexa avoid loading the ONNX embedder on every search query?",
+    "expected_fact": "LexaDb caches the Embedder and Reranker behind OnceLock<Mutex<...>>, so the ONNX model loads once per process.",
+    "expected_path": "crates/lexa-core/src/db.rs"
+  },
+  {
+    "question": "What sqlite-vec function does Lexa call to convert a float embedding to its 1-bit-per-dimension binary form at insert time?",
+    "expected_fact": "vec_quantize_binary(?) is invoked in the INSERT for both vectors_bin and vectors_bin_preview.",
+    "expected_path": "crates/lexa-core/src/db.rs"
+  }
+]

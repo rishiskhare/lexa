@@ -1,0 +1,8 @@
+{
+  "tool": "grep",
+  "tier": "external",
+  "queries": 20,
+  "correct": 0,
+  "accuracy": 0.0,
+  "median_latency_ms": 8
+}
