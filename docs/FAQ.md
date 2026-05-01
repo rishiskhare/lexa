@@ -108,10 +108,22 @@ is hot is fully offline.
 
 ## Does it work on Windows / Linux / WSL?
 
-Yes — Linux x86_64 + arm64, macOS arm64 + x86_64, Windows x86_64. The
-prebuilt installer (`scripts/install.sh`) handles the first three; on
-Windows, grab the `lexa-x.y.z-x86_64-pc-windows-msvc.zip` from the
-GitHub Releases page.
+Prebuilt binaries on every GitHub Release tag for: macOS arm64,
+macOS x86_64, Linux x86_64, Windows x86_64. The `scripts/install.sh`
+one-liner picks the right tarball automatically.
+
+**Linux ARM64**: not in the prebuilt matrix because `rmcp`'s
+`transport-io` feature transitively pulls `native-tls` → `openssl-sys`,
+which needs an aarch64 sysroot to cross-compile from x86_64 GitHub
+Actions runners. Easy native-build path:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+cargo install lexa-obsidian
+```
+
+(That works on any Linux ARM64 host directly — Raspberry Pi, AWS
+Graviton, Apple Silicon under Asahi, etc.)
 
 ## What model does it use? Can I swap?
 
