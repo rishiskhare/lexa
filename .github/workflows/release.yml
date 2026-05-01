@@ -37,11 +37,14 @@ jobs:
             os: macos-13
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            cross: true
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+        # aarch64-unknown-linux-gnu is omitted from prebuilt binaries
+        # because rmcp's transport-io feature transitively pulls
+        # `native-tls` -> `openssl-sys`, which doesn't cross-compile
+        # cleanly without setting up an aarch64 sysroot. Linux ARM64
+        # users build from source: `cargo install lexa-obsidian`
+        # works natively on those machines.
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -50,17 +53,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
-
-      - name: Install aarch64-linux toolchain
-        if: matrix.cross == true
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          mkdir -p ~/.cargo
-          cat >> ~/.cargo/config.toml <<'EOF'
-          [target.aarch64-unknown-linux-gnu]
-          linker = "aarch64-linux-gnu-gcc"
-          EOF
 
       - name: Build all shipping binaries
         shell: bash
