@@ -152,79 +152,79 @@ The default `SearchOptions` uses the `auto` tier and limit 10. Set
 `tier: SearchTier::Deep` and populate `additional_queries` for Exa-style
 multi-query deep search.
 
-## Obsidian — point Codex (or any MCP client) at your vault
+## Lexa for Obsidian — 60 seconds to a working setup
 
-`lexa-obsidian` is the vault-aware sibling of `lexa`. It strips YAML
-frontmatter before embedding, parses Obsidian-specific syntax
-(`[[wikilinks]]`, `#tags`, `^block-ids`, `![[embeds]]`), and exposes a
-note-shaped MCP tool surface.
-
-### Install
+Ask your Obsidian vault questions through Codex, Claude Desktop,
+Cursor, Claude Code, or any MCP client. **Local-first** — your notes
+never leave your machine, no API keys, no cloud round-trips.
 
 ```bash
-cargo install --path crates/lexa-obsidian
+curl -fsSL https://raw.githubusercontent.com/rishiskhare/lexa/main/scripts/install.sh | sh
+lexa-obsidian setup
 ```
 
-That installs two binaries: the `lexa-obsidian` CLI and the
-`lexa-obsidian-mcp` stdio server.
+`setup` is interactive: it asks for your vault path, optionally
+pre-indexes (recommended for >1 000-note vaults), writes the right MCP
+config block into `~/.codex/config.toml` (and Claude Desktop / Claude
+Code if you opt in), and drops an `AGENTS.md` in your vault root so
+agents route note questions through Lexa **without** having to be
+prompted with "Use lexa-obsidian.".
 
-### CLI
+Restart your MCP client and try:
 
 ```text
+> what did I write about <some topic>?
+> list my top 10 tags
+> show me backlinks for "<some note name>"
+> find notes similar to "<some note>"
+```
+
+The agent picks the right tool from the natural-language phrasing.
+
+### What the AI gets
+
+| When you ask                          | The AI calls       | What it returns                                                  |
+|---------------------------------------|--------------------|-------------------------------------------------------------------|
+| "What did I write about X?"           | `search_notes`     | Top notes ranked by hybrid (BM25 + dense + reranker) score, with title, path, line range, headline excerpt, tags, and the routed tier. |
+| "Show me my note titled Y"            | `get_note`         | Frontmatter + body + outgoing/incoming wiki-links + tags. Optionally a single block by `^id`. |
+| "What links to Y?"                    | `find_backlinks`   | Every linking note with the alias / header / block id used.       |
+| "Find notes similar to Y"             | `get_similar`      | Semantic neighbours of the seed note (excluding itself).          |
+| "What tags do I use most?"            | `list_tags`        | Top tags by usage, optional prefix filter.                         |
+| "Re-index" / "drop the index"         | `index_vault` / `purge_vault` | Maintenance.                                          |
+
+### Subcommands
+
+```text
+lexa-obsidian setup            # interactive bootstrap (most users only need this)
+lexa-obsidian doctor           # diagnose every common failure mode
+lexa-obsidian models prefetch  # download retrieval models (~390 MB) ahead of time
 lexa-obsidian --vault <path> index
 lexa-obsidian --vault <path> status
 lexa-obsidian --vault <path> tags [--prefix X] [--limit N]
 lexa-obsidian --vault <path> backlinks <note>
-lexa-obsidian --vault <path> search <query> [--tier auto|fast|deep] [--tag X] [--folder Y] [--limit N] [--json]
+lexa-obsidian --vault <path> search <query> [--tier auto|fast|deep] [--tag X] [--folder Y] [--json]
 lexa-obsidian --vault <path> watch
 ```
 
-`--vault` falls back to `LEXA_OBSIDIAN_VAULT`. The DB defaults to
-`~/.lexa/obsidian-<sha>.sqlite` so two distinct vaults never share an
-index.
+`--vault` falls back to `LEXA_OBSIDIAN_VAULT`. The DB path defaults to
+`~/.lexa/obsidian-<sha-of-vault>.sqlite` so two distinct vaults never
+share an index.
 
-### MCP server (Codex CLI / Claude Desktop / Cursor / Claude Code)
+### What gets parsed
 
-```toml
-# ~/.codex/config.toml
-[mcp_servers.lexa-obsidian]
-command = "lexa-obsidian-mcp"
-env = { LEXA_OBSIDIAN_VAULT = "/Users/<you>/Documents/MyVault" }
-```
-
-Tools exposed to the agent:
-
-| Tool             | Description                                                                                                |
-|------------------|------------------------------------------------------------------------------------------------------------|
-| `search_notes`   | Hybrid search with optional `tags` and `folders` filters. Same five tiers as the core Lexa engine.        |
-| `find_backlinks` | List every note that links to a target note (path or filename stem).                                       |
-| `list_tags`      | Top tags by usage, optional prefix filter.                                                                  |
-| `get_note`       | Fetch a single note: frontmatter, body, outgoing + incoming links, tags. Optionally restricted to a block id (`^abc`). |
-| `get_similar`    | Notes semantically similar to the given seed note.                                                          |
-| `index_vault`    | Force a re-index.                                                                                           |
-| `purge_vault`    | Drop the index for the configured vault.                                                                    |
-| `vault_status`   | DB + sidecar counts plus a `needs_index` flag callers can poll.                                             |
-
-The server **lazily indexes on the first content-bearing tool call** so
-Codex doesn't appear hung at session start. For a >1000-note vault, run
-`lexa-obsidian index` ahead of time so the first MCP call is instant.
-
-### What it parses
-
-- YAML frontmatter (`title:`, `aliases:`, `tags:` plus arbitrary custom
-  fields preserved in `note_metadata.raw_json`). Frontmatter is *stripped
-  before embedding* so it doesn't pollute the vector representation.
-- Wiki-links: `[[Note]]`, `[[Note|Alias]]`, `[[Note#Header]]`,
+- **Frontmatter** (`title:`, `aliases:`, `tags:` + arbitrary custom
+  fields preserved in `note_metadata.raw_json`). Stripped *before*
+  embedding so it doesn't pollute the vector representation.
+- **Wiki-links** — `[[Note]]`, `[[Note|Alias]]`, `[[Note#Header]]`,
   `[[Note^block-id]]`, `![[Embed]]`. Stored in `note_links`; backlinks
   are a single SQL JOIN.
-- Tags: frontmatter `tags:` (string, list, or comma-string) plus inline
-  `#tag` (including nested `#project/lexa`). Lowercase-normalised.
-  Code fences and heading lines are correctly skipped.
-- Block ids: trailing `^block-id` markers on the last line of a chunk
-  are persisted into `note_blocks` and queryable through
-  `get_note { block: "^abc" }`.
+- **Tags** — frontmatter `tags:` (string, list, or comma-string) plus
+  inline `#tag` (including nested `#project/lexa`). Lowercase-
+  normalised. Code fences and heading lines are correctly skipped.
+- **Block ids** — trailing `^block-id` markers persist into
+  `note_blocks` and are queryable through `get_note { block: "^abc" }`.
 
-### Schema (sidecar, in the same SQLite file)
+### Schema (sidecar tables in the same SQLite file)
 
 ```sql
 note_metadata (doc_id PK, title, aliases_json, raw_json)
@@ -233,19 +233,33 @@ note_tags     (doc_id, tag, PRIMARY KEY(doc_id, tag))
 note_blocks   (chunk_id PK, doc_id, block_id)
 ```
 
-`ON DELETE CASCADE` rides on `documents.id`, so purging a path through
-the core Lexa API cleans the sidecars automatically.
+`ON DELETE CASCADE` rides on `documents.id`, so purging a path cleans
+the sidecars automatically.
 
-### 5-minute Codex verification
+### Indexing UX
 
-```bash
-cargo install --path crates/lexa-obsidian
-lexa-obsidian --vault ~/Documents/MyVault index
-# Add the [mcp_servers.lexa-obsidian] block above to ~/.codex/config.toml
-echo "\nLEXA_CANARY_X7Q_obsidian_test" >> ~/Documents/MyVault/Daily/2026-05-01.md
-# Restart Codex, then ask:
-#   > Use lexa-obsidian. Find the note containing "LEXA_CANARY_X7Q".
-```
+Lexa indexes in the **background** as soon as the MCP server starts.
+While indexing is in flight, content-bearing tool calls (`search_notes`,
+`get_note`, `get_similar`, `find_backlinks`) return a fast `{indexing:
+true, notes_seen, elapsed_seconds}` payload instead of blocking — so
+Codex never appears hung. For large vaults (>1 000 notes) running
+`lexa-obsidian setup` once with the pre-index step (or `lexa-obsidian
+index` ahead of time) eliminates the wait entirely.
+
+### Privacy + threat model
+
+- 100 % local. Network calls: model downloads on first run (Nomic v1.5
+  ONNX ~110 MB, BGE reranker ~280 MB), nothing after. No telemetry, no
+  analytics, no API keys.
+- Read-only on your vault. The MCP server does not create, edit, or
+  delete notes.
+- The MCP server only spawns the `lexa-obsidian-mcp` binary itself,
+  never user-supplied subprocesses.
+- Verify yourself: `tcpdump -i any host huggingface.co` for ten minutes
+  of usage shows zero traffic after the model cache is hot.
+
+For more, see [`docs/FAQ.md`](docs/FAQ.md) and
+[`docs/adr/006-obsidian.md`](docs/adr/006-obsidian.md).
 
 ## Benchmarks
 

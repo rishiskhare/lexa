@@ -4,6 +4,12 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Local-first hybrid retrieval engine: BM25 + binary-quantized Matryoshka KNN + cross-encoder rerank, in one Rust crate. Pairs with `lexa-obsidian` for vault-aware MCP."
+documentation = "https://docs.rs/lexa-core"
+homepage = "https://github.com/rishiskhare/lexa"
+readme = "../../README.md"
+keywords = ["search", "retrieval", "embedding", "rag", "sqlite-vec"]
+categories = ["text-processing", "database", "command-line-utilities"]
 
 [dependencies]
 fastembed.workspace = true

@@ -4,6 +4,12 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "rmcp stdio MCP server for the Lexa hybrid retrieval engine. Exposes `search_files`, `index_path`, `list_indexed_paths`, `purge_path`, and `status` to any MCP client (Codex, Claude Desktop, Cursor, Claude Code) for arbitrary local file trees. Pairs with `lexa-obsidian-mcp` for vault-shaped queries."
+documentation = "https://docs.rs/lexa-mcp"
+homepage = "https://github.com/rishiskhare/lexa"
+readme = "../../README.md"
+keywords = ["search", "mcp", "retrieval", "rag", "code"]
+categories = ["command-line-utilities", "text-processing"]
 
 [dependencies]
 anyhow.workspace = true

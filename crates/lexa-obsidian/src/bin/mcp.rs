@@ -28,7 +28,8 @@
 //! to avoid the wait.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use lexa_core::{EmbeddingBackend, EmbeddingConfig, SearchTier};
 use lexa_obsidian::{LexaObsidianDb, SearchNotesOptions};
@@ -37,12 +38,37 @@ use rmcp::{
     model::{ServerCapabilities, ServerInfo},
     schemars, tool, tool_handler, tool_router, ErrorData, ServerHandler, ServiceExt,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+/// Index state shared between the server and the background indexing task.
+///
+/// `Idle` means the vault is fully indexed and queries can run.
+/// `Indexing` means the background task is still walking files; queries
+/// return a fast `{indexing: true, ...}` payload instead of blocking.
+/// `Failed` records the last error so the next tool call surfaces it
+/// rather than silently re-trying.
+#[derive(Debug, Clone)]
+enum IndexState {
+    Idle,
+    Indexing {
+        started_at: Instant,
+        notes_seen: usize,
+    },
+    Failed(String),
+}
+
+#[derive(Serialize)]
+struct IndexingResponse {
+    indexing: bool,
+    message: String,
+    notes_seen: usize,
+    elapsed_seconds: f32,
+}
 
 struct LexaObsidianServer {
     tool_router: ToolRouter<Self>,
-    db: Mutex<LexaObsidianDb>,
-    indexed: Mutex<bool>,
+    db: Arc<Mutex<LexaObsidianDb>>,
+    state: Arc<Mutex<IndexState>>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -98,43 +124,113 @@ struct EmptyRequest {}
 impl LexaObsidianServer {
     fn new(db: LexaObsidianDb) -> Self {
         let already_indexed = db.vault_status().map(|s| !s.needs_index).unwrap_or(false);
-        Self {
+        let state = if already_indexed {
+            IndexState::Idle
+        } else {
+            IndexState::Indexing {
+                started_at: Instant::now(),
+                notes_seen: 0,
+            }
+        };
+        let server = Self {
             tool_router: Self::tool_router(),
-            db: Mutex::new(db),
-            indexed: Mutex::new(already_indexed),
+            db: Arc::new(Mutex::new(db)),
+            state: Arc::new(Mutex::new(state)),
+        };
+        if !already_indexed {
+            server.spawn_background_index();
         }
+        server
     }
 
-    /// Make sure the vault has been indexed at least once before serving
-    /// content-bearing requests. Idempotent on subsequent calls thanks
-    /// to lexa-core's content-hash skip.
-    fn ensure_indexed(&self) -> Result<(), ErrorData> {
-        let mut flag = self
-            .indexed
+    /// Kick off indexing on a blocking thread pool task. The MCP stdio
+    /// loop stays responsive — content-bearing tool calls see
+    /// `IndexState::Indexing` and return a fast progress payload.
+    fn spawn_background_index(&self) {
+        let db = self.db.clone();
+        let state = self.state.clone();
+        eprintln!("lexa-obsidian: priming index in the background…");
+        tokio::task::spawn_blocking(move || {
+            let result = match db.lock() {
+                Ok(mut guard) => guard.index_vault(),
+                Err(err) => {
+                    if let Ok(mut s) = state.lock() {
+                        *s = IndexState::Failed(format!("db lock poisoned: {err}"));
+                    }
+                    return;
+                }
+            };
+            if let Ok(mut s) = state.lock() {
+                *s = match result {
+                    Ok(report) => {
+                        eprintln!(
+                            "lexa-obsidian: indexed {} note(s); {} tags, {} links",
+                            report.notes_indexed, report.tags, report.links
+                        );
+                        IndexState::Idle
+                    }
+                    Err(err) => {
+                        eprintln!("lexa-obsidian: index failed: {err}");
+                        IndexState::Failed(err.to_string())
+                    }
+                };
+            }
+        });
+    }
+
+    /// Returns `Ok(None)` if the index is ready and the caller should
+    /// proceed with the query. Returns `Ok(Some(json))` if indexing is
+    /// still in progress and the caller should return the progress
+    /// payload instead of blocking. Returns `Err` if the last index
+    /// attempt failed.
+    fn check_index_state(&self) -> Result<Option<String>, ErrorData> {
+        let state = self
+            .state
             .lock()
             .map_err(|err| internal_error(err.to_string()))?;
-        if *flag {
-            return Ok(());
+        match &*state {
+            IndexState::Idle => Ok(None),
+            IndexState::Indexing {
+                started_at,
+                notes_seen,
+            } => {
+                let response = IndexingResponse {
+                    indexing: true,
+                    message: "lexa-obsidian is still indexing the vault. \
+                              Run `lexa-obsidian index` once ahead of time to \
+                              skip this on subsequent sessions."
+                        .to_string(),
+                    notes_seen: *notes_seen,
+                    elapsed_seconds: started_at.elapsed().as_secs_f32(),
+                };
+                Ok(Some(
+                    serde_json::to_string_pretty(&response).map_err(internal_error)?,
+                ))
+            }
+            IndexState::Failed(msg) => Err(internal_error(format!(
+                "vault indexing failed: {msg}. Try `lexa-obsidian doctor`."
+            ))),
         }
-        let mut db = self
-            .db
-            .lock()
-            .map_err(|err| internal_error(err.to_string()))?;
-        eprintln!("lexa-obsidian: priming index (one-time)…");
-        db.index_vault().map_err(internal_error)?;
-        *flag = true;
-        Ok(())
     }
 }
 
 #[tool_router]
 impl LexaObsidianServer {
-    #[tool(description = "Hybrid search over indexed Obsidian notes")]
+    #[tool(
+        description = "PRIMARY tool for any question about the user's Obsidian \
+            notes — recall, summarisation, lookup, 'what did I write about X', \
+            'find a note on Y', 'show me anything about Z'. Default tier 'auto' \
+            picks the right retrieval pipeline for each query. Returns notes \
+            ranked by hybrid (BM25 + dense + reranker) score with title, path, \
+            line range, headline excerpt, tags, and the routed-tier breakdown."
+    )]
     fn search_notes(
         &self,
         Parameters(req): Parameters<SearchNotesRequest>,
     ) -> Result<String, ErrorData> {
-        self.ensure_indexed()?;
+        if let Some(progress) = self.check_index_state()? {
+            return Ok(progress);
+        }
         let tier: SearchTier = req
             .tier
             .as_deref()
@@ -158,12 +254,16 @@ impl LexaObsidianServer {
         serde_json::to_string_pretty(&hits).map_err(internal_error)
     }
 
-    #[tool(description = "List notes linking to a given note (path or filename stem)")]
+    #[tool(description = "Use for 'what notes link to X', 'who references Y', \
+            'show me backlinks for Z'. Accepts a path or just a filename stem. \
+            Returns each linking note with the alias / header / block id used.")]
     fn find_backlinks(
         &self,
         Parameters(req): Parameters<NoteRequest>,
     ) -> Result<String, ErrorData> {
-        self.ensure_indexed()?;
+        if let Some(progress) = self.check_index_state()? {
+            return Ok(progress);
+        }
         let db = self
             .db
             .lock()
@@ -172,9 +272,13 @@ impl LexaObsidianServer {
         serde_json::to_string_pretty(&backlinks).map_err(internal_error)
     }
 
-    #[tool(description = "List the most-used tags in the vault")]
+    #[tool(description = "Use for 'what tags do I use', 'list my top tags', \
+            'show me tags starting with project'. Returns tag/count pairs \
+            sorted by usage.")]
     fn list_tags(&self, Parameters(req): Parameters<ListTagsRequest>) -> Result<String, ErrorData> {
-        self.ensure_indexed()?;
+        if let Some(progress) = self.check_index_state()? {
+            return Ok(progress);
+        }
         let db = self
             .db
             .lock()
@@ -186,10 +290,15 @@ impl LexaObsidianServer {
     }
 
     #[tool(
-        description = "Fetch a single note (frontmatter, body, outgoing + incoming links, tags). Optionally restricted to a block id."
+        description = "Use for 'show me the note titled X', 'what's in note Y', \
+            'expand block ^abc from note Z'. Returns frontmatter, body, outgoing \
+            and incoming wiki-links, and tags for the named note. When `block` \
+            is supplied, returns only the block's paragraph."
     )]
     fn get_note(&self, Parameters(req): Parameters<GetNoteRequest>) -> Result<String, ErrorData> {
-        self.ensure_indexed()?;
+        if let Some(progress) = self.check_index_state()? {
+            return Ok(progress);
+        }
         let db = self
             .db
             .lock()
@@ -200,12 +309,16 @@ impl LexaObsidianServer {
         serde_json::to_string_pretty(&note).map_err(internal_error)
     }
 
-    #[tool(description = "Find notes semantically similar to the given note")]
+    #[tool(description = "Use for 'find related notes', 'what's similar to X', \
+            'more like this'. Embeds the seed note's body and returns the top \
+            semantically nearest neighbours (excluding the seed itself).")]
     fn get_similar(
         &self,
         Parameters(req): Parameters<GetSimilarRequest>,
     ) -> Result<String, ErrorData> {
-        self.ensure_indexed()?;
+        if let Some(progress) = self.check_index_state()? {
+            return Ok(progress);
+        }
         let db = self
             .db
             .lock()
@@ -218,16 +331,19 @@ impl LexaObsidianServer {
 
     #[tool(description = "Force a full re-index of the configured vault")]
     fn index_vault(&self, Parameters(_req): Parameters<EmptyRequest>) -> Result<String, ErrorData> {
+        // Block on the running background indexer if there is one;
+        // explicit re-index callers want a synchronous result.
+        if let Some(progress) = self.check_index_state()? {
+            return Ok(progress);
+        }
         let mut db = self
             .db
             .lock()
             .map_err(|err| internal_error(err.to_string()))?;
         let report = db.index_vault().map_err(internal_error)?;
-        let mut flag = self
-            .indexed
-            .lock()
-            .map_err(|err| internal_error(err.to_string()))?;
-        *flag = true;
+        if let Ok(mut state) = self.state.lock() {
+            *state = IndexState::Idle;
+        }
         serde_json::to_string_pretty(&report).map_err(internal_error)
     }
 
@@ -238,11 +354,12 @@ impl LexaObsidianServer {
             .lock()
             .map_err(|err| internal_error(err.to_string()))?;
         let count = db.purge_vault().map_err(internal_error)?;
-        let mut flag = self
-            .indexed
-            .lock()
-            .map_err(|err| internal_error(err.to_string()))?;
-        *flag = false;
+        if let Ok(mut state) = self.state.lock() {
+            *state = IndexState::Indexing {
+                started_at: Instant::now(),
+                notes_seen: 0,
+            };
+        }
         Ok(format!("purged {count} note(s)"))
     }
 
@@ -271,6 +388,12 @@ impl ServerHandler for LexaObsidianServer {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Honour `LEXA_OFFLINE=1` (or the canonical `HF_HUB_OFFLINE=1`)
+    // so MCP clients can launch the server in a hard-offline mode
+    // after `lexa-obsidian models prefetch` has warmed the cache.
+    if std::env::var_os("LEXA_OFFLINE").is_some() {
+        std::env::set_var("HF_HUB_OFFLINE", "1");
+    }
     let db = open_db_from_env()?;
     LexaObsidianServer::new(db)
         .serve(rmcp::transport::stdio())

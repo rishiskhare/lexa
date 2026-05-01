@@ -11,7 +11,7 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/rishikhare/lexa"
+repository = "https://github.com/rishiskhare/lexa"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -47,3 +47,23 @@ zip = "2"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Generates the GitHub Release workflow + a `curl | sh` installer.
+# Run `cargo dist init` to refresh, then `git tag v0.1.0 && git push --tags`
+# to ship.
+[workspace.metadata.dist]
+cargo-dist-version = "0.21.1"
+ci = "github"
+installers = ["shell", "powershell"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+pr-run-mode = "plan"
+allow-dirty = ["ci"]
+# Skip the bench harness in release tarballs; it depends on repo-local
+# fixtures and isn't useful standalone. Everything else ships.
+publish-prereleases = true
