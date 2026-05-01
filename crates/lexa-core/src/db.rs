@@ -81,14 +81,45 @@ impl LexaDb {
     }
 
     pub fn index_path(&mut self, path: impl AsRef<Path>) -> Result<usize> {
+        self.index_path_with_preprocessor::<()>(
+            path,
+            None::<&dyn Preprocessor<Payload = ()>>,
+            |_, _, _| Ok(()),
+        )
+    }
+
+    /// Index a path with a per-file **preprocessor** and **sidecar
+    /// commit hook**.
+    ///
+    /// `preprocessor` is invoked for every supported file before chunking;
+    /// it receives the raw bytes and may return `Some(PreprocessedDoc)` to
+    /// substitute the text used for chunking (e.g. strip Obsidian
+    /// frontmatter so it doesn't leak into the embedding) along with a
+    /// caller-defined `payload` of metadata. Returning `None` skips the
+    /// file. Returning the unmodified text + `Default::default()` payload
+    /// matches the plain `index_path` behaviour.
+    ///
+    /// `commit_sidecar` runs **inside** the same transaction as the
+    /// chunk inserts, so the caller's sidecar tables (e.g.
+    /// `note_metadata`, `note_links`, `note_tags`) stay consistent with
+    /// `documents` even on crash.
+    pub fn index_path_with_preprocessor<P>(
+        &mut self,
+        path: impl AsRef<Path>,
+        preprocessor: Option<&dyn Preprocessor<Payload = P>>,
+        commit_sidecar: impl Fn(&Transaction<'_>, i64, &P) -> Result<()>,
+    ) -> Result<usize>
+    where
+        P: Default,
+    {
         const BATCH: usize = 64;
         let files = collect_files(path.as_ref())?;
-        let mut prepared: Vec<PreparedDoc> = Vec::new();
+        let mut prepared: Vec<PreparedDoc<P>> = Vec::new();
         let mut pending_texts: Vec<String> = Vec::new();
         let mut indexed = 0;
 
         for file in files {
-            let Some(doc) = prepare_document(&file)? else {
+            let Some(doc) = prepare_document_with(&file, preprocessor)? else {
                 continue;
             };
             if self.is_unchanged(&doc)? {
@@ -103,16 +134,16 @@ impl LexaDb {
             prepared.push(doc);
 
             if prepared.len() >= BATCH {
-                indexed += self.flush_batch(&mut prepared, &mut pending_texts)?;
+                indexed += self.flush_batch(&mut prepared, &mut pending_texts, &commit_sidecar)?;
             }
         }
         if !prepared.is_empty() {
-            indexed += self.flush_batch(&mut prepared, &mut pending_texts)?;
+            indexed += self.flush_batch(&mut prepared, &mut pending_texts, &commit_sidecar)?;
         }
         Ok(indexed)
     }
 
-    fn is_unchanged(&self, doc: &PreparedDoc) -> Result<bool> {
+    fn is_unchanged<P>(&self, doc: &PreparedDoc<P>) -> Result<bool> {
         let row: Option<String> = self
             .conn
             .query_row(
@@ -124,10 +155,11 @@ impl LexaDb {
         Ok(matches!(row, Some(hash) if hash == doc.content_hash))
     }
 
-    fn flush_batch(
+    fn flush_batch<P>(
         &mut self,
-        prepared: &mut Vec<PreparedDoc>,
+        prepared: &mut Vec<PreparedDoc<P>>,
         pending_texts: &mut Vec<String>,
+        commit_sidecar: &dyn Fn(&Transaction<'_>, i64, &P) -> Result<()>,
     ) -> Result<usize> {
         if prepared.is_empty() {
             return Ok(0);
@@ -159,7 +191,8 @@ impl LexaDb {
             let count = doc.chunks.len();
             let slice = &embeddings[cursor..cursor + count];
             cursor += count;
-            insert_document(&tx, &doc, slice)?;
+            let doc_id = insert_document(&tx, &doc, slice)?;
+            commit_sidecar(&tx, doc_id, &doc.payload)?;
             indexed += 1;
         }
         tx.commit()?;
@@ -181,7 +214,12 @@ impl LexaDb {
         search_impl(self, options)
     }
 
-    pub(crate) fn conn(&self) -> &Connection {
+    /// Borrow the underlying SQLite connection. Useful for crates that
+    /// extend the schema (e.g. `lexa-obsidian` adds `note_metadata`,
+    /// `note_links`, `note_tags`, `note_blocks` sidecar tables) and
+    /// need to run their own SQL on the same connection rather than
+    /// opening a second one (which would lock the WAL).
+    pub fn conn(&self) -> &Connection {
         &self.conn
     }
 
@@ -218,16 +256,48 @@ impl LexaDb {
     }
 }
 
-struct PreparedDoc {
+/// Per-file callback signature used by `index_path_with_preprocessor`.
+///
+/// Receives the file path and the raw bytes; may return `Some(...)` to
+/// supply a substitute body (e.g. with frontmatter stripped) and a
+/// `payload` with sidecar metadata. Returning `None` skips the file.
+pub trait Preprocessor {
+    type Payload: Default;
+
+    fn preprocess(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<Option<PreprocessOutput<Self::Payload>>>;
+}
+
+/// Output of [`Preprocessor::preprocess`].
+pub struct PreprocessOutput<P> {
+    /// Text used for chunking + embedding. Replaces the raw file body.
+    pub text: String,
+    /// Caller payload threaded into the `commit_sidecar` callback so
+    /// custom tables can be populated inside the same transaction as
+    /// the chunk insert.
+    pub payload: P,
+}
+
+struct PreparedDoc<P> {
     path: String,
     mtime: i64,
     size: i64,
     content_hash: String,
     indexed_at: i64,
     chunks: Vec<crate::chunk::RawChunk>,
+    payload: P,
 }
 
-fn prepare_document(path: &Path) -> Result<Option<PreparedDoc>> {
+fn prepare_document_with<P>(
+    path: &Path,
+    preprocessor: Option<&dyn Preprocessor<Payload = P>>,
+) -> Result<Option<PreparedDoc<P>>>
+where
+    P: Default,
+{
     let Some(kind) = supported_kind(path) else {
         return Ok(None);
     };
@@ -236,7 +306,7 @@ fn prepare_document(path: &Path) -> Result<Option<PreparedDoc>> {
         return Ok(None);
     }
     let bytes = fs::read(path)?;
-    let text = if kind == "pdf" {
+    let raw_text = if kind == "pdf" {
         pdf_extract::extract_text(path).map_err(|error| LexaError::Pdf(error.to_string()))?
     } else {
         if bytes.iter().take(4096).any(|byte| *byte == 0) {
@@ -244,6 +314,15 @@ fn prepare_document(path: &Path) -> Result<Option<PreparedDoc>> {
         }
         String::from_utf8_lossy(&bytes).replace("\r\n", "\n")
     };
+
+    let (text, payload): (String, P) = match preprocessor {
+        Some(pp) => match pp.preprocess(path, &bytes)? {
+            Some(out) => (out.text, out.payload),
+            None => return Ok(None),
+        },
+        None => (raw_text, P::default()),
+    };
+
     let raw_chunks = chunk_text_for_path(&text, kind, Some(path));
     if raw_chunks.is_empty() {
         return Ok(None);
@@ -259,10 +338,15 @@ fn prepare_document(path: &Path) -> Result<Option<PreparedDoc>> {
         content_hash: stable_hash_hex(&bytes),
         indexed_at: epoch_secs(SystemTime::now()).unwrap_or_default() as i64,
         chunks: raw_chunks,
+        payload,
     }))
 }
 
-fn insert_document(tx: &Transaction<'_>, doc: &PreparedDoc, embeddings: &[Vec<f32>]) -> Result<()> {
+fn insert_document<P>(
+    tx: &Transaction<'_>,
+    doc: &PreparedDoc<P>,
+    embeddings: &[Vec<f32>],
+) -> Result<i64> {
     if let Some(existing_id) = tx
         .query_row(
             "SELECT id FROM documents WHERE path = ?1",
@@ -311,7 +395,7 @@ fn insert_document(tx: &Transaction<'_>, doc: &PreparedDoc, embeddings: &[Vec<f3
             params![chunk_id, preview_blob],
         )?;
     }
-    Ok(())
+    Ok(doc_id)
 }
 
 fn register_sqlite_vec() {

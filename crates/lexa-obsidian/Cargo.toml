@@ -1,0 +1,36 @@
+[package]
+name = "lexa-obsidian"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "lexa_obsidian"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lexa-obsidian"
+path = "src/bin/cli.rs"
+
+[[bin]]
+name = "lexa-obsidian-mcp"
+path = "src/bin/mcp.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+lexa-core = { path = "../lexa-core" }
+notify.workspace = true
+regex.workspace = true
+rmcp.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

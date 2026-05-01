@@ -383,19 +383,21 @@ fn hydrate(
     let mut hits = Vec::new();
     let mut full_texts = Vec::new();
     let mut stmt = conn.prepare_cached(
-        "SELECT d.path, c.line_start, c.line_end, c.text
+        "SELECT d.path, c.line_start, c.line_end, c.text, c.context
          FROM chunks c JOIN documents d ON d.id = c.doc_id
          WHERE c.id = ?1",
     )?;
     for (id, score) in ranked.iter().take(limit) {
         let (hit, text) = stmt.query_row(params![id], |row| {
             let text: String = row.get(3)?;
+            let heading: Option<String> = row.get(4)?;
             let hit = SearchHit {
                 path: row.get(0)?,
                 line_start: row.get(1)?,
                 line_end: row.get(2)?,
                 score: *score,
                 excerpt: highlight(query, &text),
+                heading,
                 breakdown: TierBreakdown {
                     bm25_rank: bm25_rank.get(id).copied(),
                     vector_rank: vector_rank.get(id).copied(),

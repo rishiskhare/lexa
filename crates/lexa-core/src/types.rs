@@ -35,6 +35,12 @@ pub struct SearchHit {
     pub line_end: i64,
     pub score: f32,
     pub excerpt: String,
+    /// Parent heading of the chunk (markdown source) or the chunk's
+    /// leading symbol line (code source). `None` for plain-text chunks.
+    /// Mirrors `chunks.context` so MCP callers can render
+    /// `# Heading > excerpt` without a second SQL hit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heading: Option<String>,
     pub breakdown: TierBreakdown,
 }
 

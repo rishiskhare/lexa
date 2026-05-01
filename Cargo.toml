@@ -4,6 +4,7 @@ members = [
     "crates/lexa-cli",
     "crates/lexa-mcp",
     "crates/lexa-bench",
+    "crates/lexa-obsidian",
 ]
 resolver = "2"
 
@@ -14,15 +15,17 @@ repository = "https://github.com/rishikhare/lexa"
 
 [workspace.dependencies]
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 fastembed = "5.13"
 notify = "6"
 pdf-extract = "0.7"
 rmcp = { version = "1.5", features = ["server", "macros", "schemars", "transport-io"] }
 rusqlite = { version = "0.31", features = ["bundled", "blob"] }
+regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 sqlite-vec = "0.1"
 tempfile = "3"
 thiserror = "1"

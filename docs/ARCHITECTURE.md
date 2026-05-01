@@ -1,13 +1,14 @@
 # Lexa Architecture
 
-Lexa is structured as four crates inside one Cargo workspace:
+Lexa is structured as five crates inside one Cargo workspace:
 
-| Crate        | Role                                                                          |
-|--------------|-------------------------------------------------------------------------------|
-| `lexa-core`  | Storage, chunking, embeddings, retrieval, fusion. Library only.               |
-| `lexa-cli`   | The `lexa` binary — `index`, `search`, `purge`, `status`, `watch`.            |
-| `lexa-mcp`   | `lexa-mcp` binary — rmcp stdio server exposing search tools to MCP clients.   |
-| `lexa-bench` | `lexa-bench` binary — five reproducible benchmark harnesses (A–E).            |
+| Crate           | Role                                                                                                |
+|-----------------|-----------------------------------------------------------------------------------------------------|
+| `lexa-core`     | Storage, chunking, embeddings, retrieval, fusion. Library only.                                     |
+| `lexa-cli`      | The `lexa` binary — `index`, `search`, `purge`, `status`, `watch`.                                  |
+| `lexa-mcp`      | `lexa-mcp` binary — rmcp stdio server exposing search tools to MCP clients.                         |
+| `lexa-bench`    | `lexa-bench` binary — five reproducible benchmark harnesses (A–E).                                  |
+| `lexa-obsidian` | `lexa-obsidian` CLI + `lexa-obsidian-mcp` server — vault-aware indexing for Obsidian. See ADR-006.   |
 
 Everything else is a single static binary, no daemon, no Docker, no Python.
 
@@ -139,3 +140,4 @@ See:
 - `docs/adr/003-chunking.md` — chunking by file type
 - `docs/adr/004-tiers.md` — the five-tier ladder
 - `docs/adr/005-mcp.md` — MCP posture
+- `docs/adr/006-obsidian.md` — Obsidian adapter (sidecar tables, lazy/explicit indexing)
