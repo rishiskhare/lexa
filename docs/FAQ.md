@@ -28,6 +28,21 @@ While indexing is in flight, the MCP server returns a fast `{indexing:
 true, ...}` response on every content-bearing tool call instead of
 blocking, so Codex won't appear hung.
 
+## Will Lexa pick up notes I add or change after the MCP server is running?
+
+Yes, **automatically**. Since v0.1.1, `lexa-obsidian-mcp` spawns a
+filesystem watcher (`notify-debouncer-mini`) on startup. Notes you
+add, edit, or delete in Obsidian appear in (or vanish from) search
+within ~500 ms of the file save — no manual `index_vault` call needed.
+
+The watcher debounces 500 ms of FS events (so Obsidian's per-keystroke
+auto-save bursts collapse to one re-index) and the re-index is
+idempotent — only chunks whose content hash changed get re-embedded.
+
+If you'd rather run the watcher externally (e.g. via launchd /
+systemd) and keep the MCP server static, set
+`LEXA_OBSIDIAN_NO_WATCH=1` and run `lexa-obsidian watch` separately.
+
 ## How do I switch vaults?
 
 ```bash

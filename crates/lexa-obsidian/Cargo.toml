@@ -1,6 +1,6 @@
 [package]
 name = "lexa-obsidian"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -26,8 +26,9 @@ path = "src/bin/mcp.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-lexa-core = { path = "../lexa-core", version = "0.1.0" }
+lexa-core = { path = "../lexa-core", version = "0.1.1" }
 notify.workspace = true
+notify-debouncer-mini.workspace = true
 regex.workspace = true
 rmcp.workspace = true
 rusqlite.workspace = true

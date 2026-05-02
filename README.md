@@ -72,6 +72,7 @@ lexa-obsidian --vault ./demo-vault --hash-embeddings search "reranker latency"
 | **Obsidian-native**                      | Frontmatter stripped before embedding. Wiki-links, inline `#tags`, `^block-ids`, and `![[embeds]]` parsed into sidecar tables. |
 | **MCP-first**                            | Eight tools — `search_notes`, `find_backlinks`, `list_tags`, `get_note`, `get_similar`, `index_vault`, `purge_vault`, `vault_status`. |
 | **Background indexing**                  | The MCP server indexes in the background; content calls return `{indexing: true, ...}` while in-flight, so Codex never hangs. |
+| **Live re-indexing**                     | Built-in `notify-debouncer-mini` watcher: notes you add, edit, or delete in Obsidian appear in (or vanish from) search within ~500 ms. Idempotent on every event. |
 | **One static binary**                    | No daemon, no Python, no Docker. SQLite + `sqlite-vec` is the entire backend.      |
 | **100% local**                           | First run downloads Nomic + BGE ONNX (~390 MB). After that, zero network calls. No telemetry, no API keys. |
 | **`--offline` flag**                     | Sets `HF_HUB_OFFLINE=1` so fastembed refuses every network fetch — hard offline guarantee after `models prefetch`. |

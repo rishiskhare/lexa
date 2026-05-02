@@ -19,6 +19,7 @@ clap = { version = "4", features = ["derive", "env"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 fastembed = "5.13"
 notify = "6"
+notify-debouncer-mini = "0.4"
 pdf-extract = "0.7"
 rmcp = { version = "1.5", features = ["server", "macros", "schemars", "transport-io"] }
 rusqlite = { version = "0.31", features = ["bundled", "blob"] }

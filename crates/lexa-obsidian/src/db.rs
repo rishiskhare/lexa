@@ -35,6 +35,11 @@ pub struct LexaObsidianDb {
 pub struct IndexReport {
     pub notes_seen: usize,
     pub notes_indexed: usize,
+    /// Notes that were in the index but no longer exist on disk; their
+    /// `documents` rows (and CASCADE-linked sidecar rows) were removed
+    /// by `index_vault`. Always reported so callers can surface "your
+    /// deleted notes are no longer searchable" feedback.
+    pub notes_deleted: usize,
     pub links: usize,
     pub tags: usize,
     pub blocks: usize,
@@ -155,6 +160,7 @@ impl LexaObsidianDb {
         let mut report = IndexReport {
             notes_seen: 0,
             notes_indexed: 0,
+            notes_deleted: 0,
             links: 0,
             tags: 0,
             blocks: 0,
@@ -184,6 +190,11 @@ impl LexaObsidianDb {
         report.tags = report_tags.get();
         report.links = report_links.get();
 
+        // Sweep for orphans: notes that are still in `documents` but have
+        // disappeared from the on-disk vault. Without this, deleted notes
+        // stay searchable forever.
+        report.notes_deleted = self.purge_orphans()?;
+
         // Block IDs need chunks.id, which only exists post-commit.
         let docs = self.markdown_documents()?;
         report.notes_seen = docs.len();
@@ -196,6 +207,28 @@ impl LexaObsidianDb {
         self.resolve_pending_links()?;
 
         Ok(report)
+    }
+
+    /// Remove `documents` rows whose path no longer exists on disk.
+    /// CASCADE on `documents.id` cleans up `chunks`, `chunks_fts`,
+    /// `vectors_bin`, `vectors_bin_preview`, `note_metadata`,
+    /// `note_links`, `note_tags`, and `note_blocks` automatically.
+    fn purge_orphans(&self) -> Result<usize> {
+        let docs = self.markdown_documents()?;
+        let mut orphan_ids = Vec::new();
+        for (doc_id, path) in docs {
+            if !path.exists() {
+                orphan_ids.push(doc_id);
+            }
+        }
+        if orphan_ids.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.inner.conn();
+        for id in &orphan_ids {
+            conn.execute("DELETE FROM documents WHERE id = ?1", params![id])?;
+        }
+        Ok(orphan_ids.len())
     }
 
     /// Hybrid retrieval restricted to indexed Obsidian notes.

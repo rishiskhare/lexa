@@ -1866,7 +1866,7 @@ checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 
 [[package]]
 name = "lexa"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1878,7 +1878,7 @@ dependencies = [
 
 [[package]]
 name = "lexa-bench"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1893,7 +1893,7 @@ dependencies = [
 
 [[package]]
 name = "lexa-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fastembed",
  "pdf-extract",
@@ -1917,7 +1917,7 @@ dependencies = [
 
 [[package]]
 name = "lexa-mcp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "lexa-core",
@@ -1930,12 +1930,13 @@ dependencies = [
 
 [[package]]
 name = "lexa-obsidian"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
  "lexa-core",
  "notify",
+ "notify-debouncer-mini",
  "regex",
  "rmcp",
  "rusqlite",
@@ -2295,6 +2296,17 @@ dependencies = [
  "mio 0.8.11",
  "walkdir",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "notify-debouncer-mini"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d40b221972a1fc5ef4d858a2f671fb34c75983eb385463dff3780eeff6a9d43"
+dependencies = [
+ "crossbeam-channel",
+ "log",
+ "notify",
 ]
 
 [[package]]

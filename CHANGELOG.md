@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-01
+
+### Added
+
+- **Built-in vault watcher in `lexa-obsidian-mcp`.** The MCP server
+  spawns a `notify-debouncer-mini`-backed filesystem watcher on
+  startup and re-runs `index_vault` whenever a `.md` (or other
+  note-shaped) file changes under the vault root. 500 ms debounce
+  window collapses Obsidian's auto-save bursts into a single
+  re-index. Disable with `LEXA_OBSIDIAN_NO_WATCH=1` if you'd rather
+  run `lexa-obsidian watch` separately.
+- **Note-deletion handling.** `LexaObsidianDb::index_vault` now
+  set-diffs the on-disk vault against the `documents` table and
+  CASCADE-deletes orphans. Notes you remove in Obsidian disappear
+  from search within ~500 ms of the file system event.
+- `IndexReport.notes_deleted` reports the orphan count so callers can
+  surface "your deleted notes are no longer searchable" feedback.
+
+### Changed
+
+- Index re-run on filesystem events is fully idempotent — unchanged
+  notes are skipped via the existing content-hash check, so a chatty
+  editor doesn't re-embed everything on every keystroke.
+
 ## [0.1.0] - 2026-05-01
 
 Initial public release.

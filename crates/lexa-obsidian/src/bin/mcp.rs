@@ -27,18 +27,28 @@
 //! responses. Run `lexa-obsidian index` ahead of time on large vaults
 //! to avoid the wait.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use lexa_core::{EmbeddingBackend, EmbeddingConfig, SearchTier};
 use lexa_obsidian::{LexaObsidianDb, SearchNotesOptions};
+use notify::RecursiveMode;
+use notify_debouncer_mini::{new_debouncer, DebouncedEvent};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
     schemars, tool, tool_handler, tool_router, ErrorData, ServerHandler, ServiceExt,
 };
 use serde::{Deserialize, Serialize};
+
+/// Debounce window for the built-in vault watcher. 500 ms is the
+/// commonly recommended setting (see `notify-debouncer-mini` README +
+/// the OneUptime "file watcher debouncing in Rust" 2026 write-up):
+/// long enough to collapse Obsidian's auto-save bursts into a single
+/// re-index, short enough that new notes appear in search within
+/// roughly half a second of saving.
+const WATCH_DEBOUNCE: Duration = Duration::from_millis(500);
 
 /// Index state shared between the server and the background indexing task.
 ///
@@ -132,6 +142,7 @@ impl LexaObsidianServer {
                 notes_seen: 0,
             }
         };
+        let vault_root = db.vault_root().to_path_buf();
         let server = Self {
             tool_router: Self::tool_router(),
             db: Arc::new(Mutex::new(db)),
@@ -140,7 +151,84 @@ impl LexaObsidianServer {
         if !already_indexed {
             server.spawn_background_index();
         }
+        // Whether or not the initial prime is needed, spawn the live
+        // watcher so notes added / edited / deleted while the MCP
+        // server is running show up in search within ~500 ms.
+        // Disable with `LEXA_OBSIDIAN_NO_WATCH=1` (e.g. for tests or
+        // setups that prefer running `lexa-obsidian watch` separately).
+        if std::env::var_os("LEXA_OBSIDIAN_NO_WATCH").is_none() {
+            server.spawn_watcher(vault_root);
+        }
         server
+    }
+
+    /// Live filesystem watcher. Spawned once at startup, lives for the
+    /// lifetime of the process. Coalesces bursts of FS events into one
+    /// re-index per `WATCH_DEBOUNCE` window via `notify-debouncer-mini`.
+    /// `index_vault` is idempotent: unchanged notes are skipped via the
+    /// content-hash check in lexa-core, so a chatty editor doesn't
+    /// re-embed everything on every keystroke.
+    fn spawn_watcher(&self, vault_root: PathBuf) {
+        let db = self.db.clone();
+        std::thread::spawn(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let mut debouncer = match new_debouncer(WATCH_DEBOUNCE, tx) {
+                Ok(d) => d,
+                Err(err) => {
+                    eprintln!("lexa-obsidian: failed to start watcher: {err}");
+                    return;
+                }
+            };
+            if let Err(err) = debouncer
+                .watcher()
+                .watch(&vault_root, RecursiveMode::Recursive)
+            {
+                eprintln!(
+                    "lexa-obsidian: failed to watch {}: {err}",
+                    vault_root.display()
+                );
+                return;
+            }
+            eprintln!("lexa-obsidian: watching {}", vault_root.display());
+            for batch in rx {
+                let events: Vec<DebouncedEvent> = match batch {
+                    Ok(v) => v,
+                    Err(err) => {
+                        eprintln!("lexa-obsidian: watch error: {err}");
+                        continue;
+                    }
+                };
+                if events.is_empty() {
+                    continue;
+                }
+                // The debouncer reports per-path events; we re-run
+                // index_vault as a whole because the content-hash
+                // skip makes that cheap, and because handling
+                // renames + deletes correctly requires a vault-wide
+                // sweep anyway (`purge_orphans`).
+                if !any_markdown(&events) {
+                    continue;
+                }
+                let mut guard = match db.lock() {
+                    Ok(g) => g,
+                    Err(err) => {
+                        eprintln!("lexa-obsidian: db lock poisoned in watcher: {err}");
+                        continue;
+                    }
+                };
+                match guard.index_vault() {
+                    Ok(report) => {
+                        if report.notes_indexed > 0 || report.notes_deleted > 0 {
+                            eprintln!(
+                                "lexa-obsidian: re-indexed: {} added/changed, {} removed",
+                                report.notes_indexed, report.notes_deleted
+                            );
+                        }
+                    }
+                    Err(err) => eprintln!("lexa-obsidian: re-index failed: {err}"),
+                }
+            }
+        });
     }
 
     /// Kick off indexing on a blocking thread pool task. The MCP stdio
@@ -442,4 +530,24 @@ fn invalid_params(message: impl Into<String>) -> ErrorData {
 
 fn internal_error(error: impl std::fmt::Display) -> ErrorData {
     ErrorData::internal_error(error.to_string(), None)
+}
+
+/// Did any of the events in this batch touch a `.md` (or other note-
+/// shaped) file? Filters out spurious bursts on `.obsidian/` config
+/// changes, hidden-file caches, etc., that don't affect retrieval.
+fn any_markdown(events: &[DebouncedEvent]) -> bool {
+    events.iter().any(|e| is_note_path(&e.path))
+}
+
+fn is_note_path(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    // Mirror lexa-core/src/chunk.rs::supported_kind for the formats
+    // worth re-indexing on. Keep this list permissive — false positives
+    // just mean an extra `index_vault` call (which is idempotent).
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "md" | "mdx" | "markdown" | "txt" | "log" | "json" | "toml" | "yaml" | "yml" | "csv"
+    )
 }

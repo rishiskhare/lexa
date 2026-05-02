@@ -1,6 +1,6 @@
 [package]
 name = "lexa-mcp"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -13,7 +13,7 @@ categories = ["command-line-utilities", "text-processing"]
 
 [dependencies]
 anyhow.workspace = true
-lexa-core = { path = "../lexa-core", version = "0.1.0" }
+lexa-core = { path = "../lexa-core", version = "0.1.1" }
 rmcp.workspace = true
 serde.workspace = true
 serde_json.workspace = true
